@@ -1,0 +1,46 @@
+---
+abstract: 'Manage database patches in the style of Module::Build.'
+author:
+  - 'Brian Duggan <brian.duggan@nasa.gov>'
+build_requires:
+  File::Copy::Recursive: 0
+  File::Slurp: 0
+  IO::Socket::INET: 0
+  Test::More: 0
+configure_requires:
+  Module::Build: 0.4
+dynamic_config: 1
+generated_by: 'Module::Build version 0.4, CPAN::Meta::Converter version 2.120921'
+license: perl
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.4.html
+  version: 1.4
+name: Module-Build-Database
+provides:
+  Module::Build::Database:
+    file: lib/Module/Build/Database.pm
+    version: 0.28
+  Module::Build::Database::Helpers:
+    file: lib/Module/Build/Database/Helpers.pm
+    version: 0
+  Module::Build::Database::PostgreSQL:
+    file: lib/Module/Build/Database/PostgreSQL.pm
+    version: 0
+  Module::Build::Database::PostgreSQL::Templates:
+    file: lib/Module/Build/Database/PostgreSQL/Templates.pm
+    version: 0
+  Module::Build::Database::SQLite:
+    file: lib/Module/Build/Database/SQLite.pm
+    version: 0
+  Test::MBD:
+    file: lib/Test/MBD.pm
+    version: 0
+requires:
+  DBD::Pg: 0
+  DBD::SQLite: 0
+  Digest::MD5: 0
+  File::Copy::Recursive: 0
+  Sub::Exporter: 0
+resources:
+  license: http://dev.perl.org/licenses/
+version: 0.28

@@ -1,0 +1,19 @@
+Module-Build-Database -- build a database module::build style.
+
+INSTALLATION
+
+To install this module, run the following commands:
+
+    perl Build.PL
+    ./Build
+    ./Build test
+    ./Build install
+
+DESCRIPTION
+
+This is a subclass of Module::Build that adds functionality
+for keeping a database schema up to date.
+
+See the pod for more documentation.
+See eg/ for sample usage.
+
