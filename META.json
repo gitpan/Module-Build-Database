@@ -33,6 +33,7 @@
             "DBD::SQLite" : 0,
             "Digest::MD5" : 0,
             "File::Copy::Recursive" : 0,
+            "List::MoreUtils" : 0,
             "Sub::Exporter" : 0,
             "blib" : 0
          }
@@ -41,7 +42,7 @@
    "provides" : {
       "Module::Build::Database" : {
          "file" : "lib/Module/Build/Database.pm",
-         "version" : "0.37"
+         "version" : "0.38"
       },
       "Module::Build::Database::Helpers" : {
          "file" : "lib/Module/Build/Database/Helpers.pm",
@@ -70,5 +71,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.37"
+   "version" : "0.38"
 }

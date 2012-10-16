@@ -169,6 +169,14 @@ name will be formed by prepending 'lib' and appending
 Patches will be applied in lexicographic order, so their names should start
 with a sequence of digits, e.g.  0010_something.sql, 0020_something_else.sql, etc.
 
+=head1 AUTHOR
+
+ Brian Duggan
+
+ Graham Ollis
+
+ Curt Tilmes
+
 =head1 TODO
 
 Allow dbclean to not interfere with other running mbd-test databases.  Currently it
@@ -184,13 +192,14 @@ package Module::Build::Database;
 use File::Basename qw/basename/;
 use File::Path qw/mkpath/;
 use Digest::MD5;
+use List::MoreUtils qw/uniq/;
 use warnings;
 use strict;
 
 use Module::Build::Database::Helpers qw/debug info/;
 use base 'Module::Build';
 
-our $VERSION = '0.37';
+our $VERSION = '0.38';
 
 __PACKAGE__->add_property(database_object_class => default => "");
 
@@ -496,6 +505,10 @@ sub ACTION_dbplant {
     $ENV{HARNESS_ACTIVE} = 1;
     Rose::Planter->plant($obj_class => $autodir);
     $self->depends_on('dbclean');
+}
+
+sub hash_properties {
+    uniq(Module::Build->hash_properties, shift->SUPER::hash_properties);
 }
 
 1;

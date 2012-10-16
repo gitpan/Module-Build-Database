@@ -32,3 +32,7 @@ Revision history for Module-Build-Database
 
 0.37   Tue Oct 16 14:58:56 EDT 2012
        dbplant fixes
+
+0.38   Tue Oct 16 15:20:07 EDT 2012
+       fix for --install_path (gollis)
+
