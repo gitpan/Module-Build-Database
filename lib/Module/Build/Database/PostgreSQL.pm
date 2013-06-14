@@ -11,7 +11,9 @@ In Build.PL :
      database_options => {
          name   => "my_database_name",
          schema => "my_schema_name",
+         # Extra items for scratch databases :
          append_to_conf => "text to add to postgresql.conf",
+         post_initdb => q[add extension if not exists hstore;],
      },
      database_extensions => {
          postgis   => {
@@ -173,6 +175,11 @@ sub _start_new_db {
     -e $domain or die "could not find $domain";
 
     $self->_create_database();
+
+    if (my $post_initdb = $self->database_options('post_initdb')) {
+        $self->_do_psql($post_initdb);
+    }
+
     return $self->_dbhost;
 }
 
