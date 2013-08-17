@@ -1,6 +1,6 @@
 =head1 NAME
 
-Module::Build::Database::PostgreSQL
+Module::Build::Database::PostgreSQL - PostgreSQL implementation for MBD
 
 =head1 SYNOPSIS
 
@@ -36,21 +36,45 @@ handling, e.g.
 
 The options are as follows ;
 
- name : the name of the database (i.e. 'create database $name')
+=over 4
 
- schema : the name of the schema to be managed by MBD
+=item name
 
- append_to_conf : extra options to append to postgresql.conf before starting test instances of postgres
+the name of the database (i.e. 'create database $name')
 
- after_create : extra SQL to run after running a 'create database' statement.  Note that this will be run in several
- different situations :
+=item schema
 
-    1. during a ./Build test (creating a test db)
-    2. during a ./Build dbfakeinstall (also creating a test db)
-    3. during an initial ./Build install; when the target database does not yet exist.
+the name of the schema to be managed by MBD
+
+=item append_to_conf
+
+extra options to append to C<postgresql.conf> before starting test instances of postgres
+
+=item after_create
+
+extra SQL to run after running a 'create database' statement.  Note that this will be run in several
+different situations :
+
+=over 4
+
+=item 1.
+
+during a L<dbtest|Module::Build::Database#dbtest> (creating a test db)
+
+=item 2.
+
+during a L<dbfakeinstall|Module::Build::Database#dbfakeinstall> (also creating a test db)
+
+=item 3.
+
+during an initial L<dbinstall|Module::Build::Database#dbinstall>; when the target database does not yet exist.
+
+=back
 
 An example of using the after_create statement would be to create a second schema which
 will not be managed by MBD, but on which the MBD-managed schema depends.
+
+=item database_extension 
 
 To specify a server side procedural language you can use the C<database_extension> -E<gt> C<languages>
 option, like so:
@@ -64,12 +88,21 @@ option, like so:
 Trying to create languages to a patch will not work because they not stored in the main schema and will
 not be included in C<base.sql> when you run C<Build dbdist>.
 
+This is also similar to
+
+ after_create => 'create extension ...',
+
+except it is executed on B<every> L<dbinstall|Module::Build::Database#dbinstall> meaning you can use this to add extensions to
+existing database deployments.
+
+=back
+
 =head1 NOTES
 
 The environment variables understood by C<psql>:
 C<PGUSER>, C<PGHOST> and C<PGPORT> will be used when
-connecting to a live database (for C<install> and
-C<fakeinstall>).  C<PGDATABASE> will be ignored;
+connecting to a live database (for L<dbinstall|Module::Build::Database#dbinstall> and
+L<fakeinstall||Module::Build::Database#dbfakeinstall>).  C<PGDATABASE> will be ignored;
 the name of the database should be specified in 
 Build.PL instead.
 
@@ -126,6 +159,7 @@ sub _do_psql {
     print $tmp $sql;
     $tmp->close;
     # -q: quiet, ON_ERROR_STOP: throw exceptions
+    local $ENV{PERL5LIB};
     do_system( $Bin{Psql}, "-q", "-v'ON_ERROR_STOP=1'", "-f", "$tmp", $database_name );
 }
 sub _do_psql_out {
@@ -133,6 +167,7 @@ sub _do_psql_out {
     my $sql = shift;
     my $database_name  = $self->database_options('name');
     # -F field separator, -x extended output, -A: unaligned
+    local $ENV{PERL5LIB};
     do_system( $Bin{Psql}, "-q", "-v'ON_ERROR_STOP=1'", "-A", "-F ' : '", "-x", "-c", qq["$sql"], $database_name );
 }
 sub _do_psql_file {
@@ -148,6 +183,7 @@ sub _do_psql_file {
     }
     my $database_name  = $self->database_options('name');
     # -q: quiet, ON_ERROR_STOP: throw exceptions
+    local $ENV{PERL5LIB};
     do_system($Bin{Psql},"-q","-v'ON_ERROR_STOP=1'","-f",$filename, $database_name);
 }
 sub _do_psql_into_file {
@@ -156,12 +192,14 @@ sub _do_psql_into_file {
     my $sql      = shift;
     my $database_name  = $self->database_options('name');
     # -A: unaligned, -F: field separator, -t: tuples only, ON_ERROR_STOP: throw exceptions
+    local $ENV{PERL5LIB};
     do_system( $Bin{Psql}, "-q", "-v'ON_ERROR_STOP=1'", "-A", "-F '\t'", "-t", "-c", qq["$sql"], $database_name, ">", "$filename" );
 }
 sub _do_psql_capture {
     my $self = shift;
     my $sql = shift;
     my $database_name  = $self->database_options('name');
+    local $ENV{PERL5LIB};
     return qx[$Bin{Psql} -c "$sql" $database_name];
 }
 
@@ -283,6 +321,7 @@ sub _dump_base_sql {
     # -x : no privileges, -O : no owner, -s : schema only, -n : only this schema
     my $database_schema = $self->database_options('schema');
     my $database_name   = $self->database_options('name');
+    local $ENV{PERL5LIB};
     do_system( $Bin{Pgdump}, "-xOs", "-E", "utf8", "-n", $database_schema, $database_name,
          "|", "egrep -v '^--'",
          "|", "egrep -v '^CREATE SCHEMA $database_schema;\$'",
@@ -308,6 +347,7 @@ sub _dump_base_data {
     # -x : no privileges, -O : no owner, -s : schema only, -n : only this schema
     my $database_schema = $self->database_options('schema');
     my $database_name   = $self->database_options('name');
+    local $ENV{PERL5LIB};
     do_system( $Bin{Pgdump}, "--data-only", "-xO", "-E", "utf8", "-n", $database_schema, $database_name,
         "|", "egrep -v '^SET search_path'",
         ">", "$tmpfile" )
@@ -356,7 +396,8 @@ sub _patch_table_exists {
     # returns true or false
     my $self = shift;
     my $file = File::Temp->new(); $file->close;
-    $self->_do_psql_into_file("$file","select tablename from pg_tables where tablename='patches_applied'");
+    my $database_schema = $self->database_options('schema');
+    $self->_do_psql_into_file("$file","select tablename from pg_tables where tablename='patches_applied' and schemaname = '$database_schema'");
     return do_system("_silent","grep -q patches_applied $file");
 }
 
@@ -366,14 +407,16 @@ sub _dump_patch_table {
     my $self = shift;
     my %args = @_;
     my $filename = $args{outfile} or Carp::confess "need a filename";
-    $self->_do_psql_into_file($filename,"select patch_name,patch_md5 from patches_applied order by patch_name");
+    my $database_schema = $self->database_options('schema');
+    $self->_do_psql_into_file($filename,"select patch_name,patch_md5 from $database_schema.patches_applied order by patch_name");
 }
 
 sub _create_patch_table {
     my $self = shift;
     # create a new patch table
+    my $database_schema = $self->database_options('schema');
     my $sql = <<EOSQL;
-    CREATE TABLE patches_applied (
+    CREATE TABLE $database_schema.patches_applied (
         patch_name   varchar(255) primary key,
         patch_md5    varchar(255),
         when_applied timestamp );
@@ -385,13 +428,15 @@ sub _insert_patch_record {
     my $self = shift;
     my $record = shift;
     my ($name,$md5) = @$record;
-    $self->_do_psql("insert into patches_applied (patch_name, patch_md5, when_applied) ".
+    my $database_schema = $self->database_options('schema');
+    $self->_do_psql("insert into $database_schema.patches_applied (patch_name, patch_md5, when_applied) ".
              " values ('$name','$md5',now()) ");
 }
 
 sub _database_exists {
     my $self  =  shift;
     my $database_name = shift || $self->database_options('name');
+    local $ENV{PERL5LIB};
     do_system("_silent","psql -Alt -F ':' | egrep -q '^$database_name:'");
 }
 
@@ -412,6 +457,7 @@ sub _create_database {
 
     # create the database if necessary
     unless ($self->_database_exists($database_name)) {
+        local $ENV{PERL5LIB};
         do_system($Bin{Createdb}, $database_name) or die "could not createdb";
     }
 
@@ -469,7 +515,9 @@ SAFE_MAKE_PLPGSQL
 }
 
 sub _remove_patches_applied_table {
-    shift->_do_psql("drop table if exists patches_applied;");
+    my $self = shift;
+    my $database_schema = $self->database_options('schema');
+    $self->_do_psql("drop table if exists $database_schema.patches_applied;");
 }
 
 sub _generate_docs {
