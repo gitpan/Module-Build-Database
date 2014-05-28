@@ -114,7 +114,9 @@ use File::Temp qw/tempdir/;
 use File::Path qw/rmtree/;
 use File::Basename qw/dirname/;
 use File::Copy::Recursive qw/fcopy dirmove/;
+use Path::Class qw/file/;
 use IO::File;
+use File::Which qw( which );
 
 use Module::Build::Database::PostgreSQL::Templates;
 use Module::Build::Database::Helpers qw/do_system verify_bin info debug/;
@@ -138,16 +140,11 @@ our %Bin = (
     Pgdoc      => [ qw/pg_autodoc postgresql_autodoc/ ],
 );
 my $server_bin_dir;
-if(-d "/usr/lib/postgresql/") {
-    # Debian/Ubuntu doesn't put server bins in the default PATH
-    if(opendir my $dh, "/usr/lib/postgresql") {
-        ($server_bin_dir) = grep { -d $_ && -x "$_/postgres" } 
-                            map { "/usr/lib/postgresql/$_/bin" } 
-                            sort { my @a = split /\./, $a; my @b = split /\./, $b; $b[0] <=> $a[0] || $b[1] <=> $a[1] }
-                            grep { /^\d+\.\d+$/ }
-                            readdir $dh;
-        closedir $dh;
-    }
+if(my $pg_config = which 'pg_config')
+{
+  $server_bin_dir = `$pg_config --bindir`;
+  chomp $server_bin_dir;
+  undef $server_bin_dir unless -d $server_bin_dir;
 }
 verify_bin(\%Bin, $server_bin_dir);
 
@@ -155,12 +152,14 @@ sub _do_psql {
     my $self = shift;
     my $sql = shift;
     my $database_name  = $self->database_options('name');
-    my $tmp = File::Temp->new();
+    my $tmp = File::Temp->new(TEMPLATE => "tmp_db_XXXX", SUFFIX => '.sql');
     print $tmp $sql;
     $tmp->close;
     # -q: quiet, ON_ERROR_STOP: throw exceptions
     local $ENV{PERL5LIB};
-    do_system( $Bin{Psql}, "-q", "-v'ON_ERROR_STOP=1'", "-f", "$tmp", $database_name );
+    my $ret = do_system( $Bin{Psql}, "-q", "-v'ON_ERROR_STOP=1'", "-f", "$tmp", $database_name );
+    $tmp->unlink_on_destroy($ret);
+    $ret;
 }
 sub _do_psql_out {
     my $self = shift;
@@ -314,22 +313,36 @@ sub _dump_base_sql {
 
     my $tmpfile = File::Temp->new(
         TEMPLATE => (dirname $outfile)."/dump_XXXXXX",
-        UNLINK   => 0
     );
-    $tmpfile->close;
 
     # -x : no privileges, -O : no owner, -s : schema only, -n : only this schema
     my $database_schema = $self->database_options('schema');
     my $database_name   = $self->database_options('name');
     local $ENV{PERL5LIB};
-    do_system( $Bin{Pgdump}, "-xOs", "-E", "utf8", "-n", $database_schema, $database_name,
-         "|", "egrep -v '^--'",
-         "|", "egrep -v '^CREATE SCHEMA $database_schema;\$'",
-         "|", "egrep -v '^SET search_path'",
-         "|", "$^X -p -e '/alter table/i and s/\\b($database_schema)\.//'",
-        ">", "$tmpfile" )
-      or return 0;
-    rename "$tmpfile", $outfile or die "rename failed: $!";
+    do_system( $Bin{Pgdump}, "-xOs", "-E", "utf8", "-n", $database_schema, $database_name, ">", "$tmpfile" )
+    or do {
+      info "Error running pgdump";
+      die "Error running pgdump : $! ${^CHILD_ERROR_NATIVE}";
+      return 0;
+    };
+
+    my @lines = file($tmpfile)->slurp();
+    unless (@lines) {
+        die "# Could not run pgdump and write to $tmpfile";
+    }
+    @lines = grep {
+        $_ !~ /^--/
+        and $_ !~ /^CREATE SCHEMA $database_schema;$/
+        and $_ !~ /^SET search_path'/;
+    } @lines;
+    for (@lines) {
+        /alter table/i and s/$database_schema\.//;
+    }
+    file($outfile)->spew(join '', @lines);
+    if (@lines > 0 && !-s $outfile) {
+        die "# Unable to write to $outfile";
+    }
+    return 1;
 }
 
 sub _dump_base_data {

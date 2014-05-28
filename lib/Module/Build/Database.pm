@@ -65,7 +65,8 @@ which adds functionality for testing and distributing changes to the database.
 Changes are represented as sql files ("patches") which will be fed into a
 command line client for the database.
 
-A complete schema is regenerated whenever L<dbdist|#dbdist> is run.
+A complete schema is regenerated whenever
+L<dbdist|Module::Build::Database#dbdist> is run.
 
 A list of the patches which have been applied is stored in two places :
 
@@ -81,9 +82,11 @@ the table C<patches_applied> within the target database.
 
 =back
 
-When the L<dbinstall|#dbinstall> action is invoked, any patches in (1) but
-not in (2) are applied.  In order to determine whether they will apply
-successfully, L<dbfakeinstall|#dbfakeinstall> may be run, which does the following :
+When the L<dbinstall|Module::Build::Database#dbinstall> action is 
+invoked, any patches in (1) but not in (2) are applied.  In order to 
+determine whether they will apply successfully, 
+L<dbfakeinstall|Module::Build::Database#dbfakeinstall> may be run, which 
+does the following :
 
 =over
 
@@ -255,8 +258,10 @@ Dump out the resulting schema, and compare it to C<db/dist/base.sql>.
 
 =back
 
-Note that L<dbdist|#dbdist> must be run to update C<base.sql> before doing C<dbfakeinstall|#dbfakeinstall>
-or C<dbinstall|#dbinstall>.
+Note that L<dbdist|Module::Build::Database#dbdist> must be run to update 
+C<base.sql> before doing 
+C<dbfakeinstall|Module::Build::Database#dbfakeinstall> or 
+C<dbinstall|Module::Build::Database#dbinstall>.
 
 =head2 dbinstall
 
@@ -282,7 +287,8 @@ Add an entry to the C<patches_applied> table for each patch applied.
 
 =item 1.
 
-Starts a test database based on C<base.sql> and any patches (see L<dbtest|#dbtest>)
+Starts a test database based on C<base.sql> and any patches (see 
+L<dbtest|Module::Build::Database#dbtest>)
 
 =item 2.
 
@@ -315,8 +321,9 @@ Curt Tilmes
 
 =head1 TODO
 
-Allow L<dbclean|#dbclean> to not interfere with other running mbd-test databases.  Currently it
-errs on the side of cleaning up too much.
+Allow L<dbclean|Module::Build::Database#dbclean> to not interfere with 
+other running mbd-test databases.  Currently it errs on the side of 
+cleaning up too much.
 
 =head1 SEE ALSO
 
@@ -329,13 +336,14 @@ use File::Basename qw/basename/;
 use File::Path qw/mkpath/;
 use Digest::MD5;
 use List::MoreUtils qw/uniq/;
+use Path::Class qw/file/;
 use warnings;
 use strict;
 
 use Module::Build::Database::Helpers qw/debug info/;
 use base 'Module::Build';
 
-our $VERSION = '0.50';
+our $VERSION = '0.51';
 
 __PACKAGE__->add_property(database_object_class => default => "");
 
@@ -355,7 +363,12 @@ sub new {
     my $subclass = "$class\::$driver";
     eval "use $subclass";
     die $@ if $@;
-    return $subclass->new(%args);
+    my $self = $subclass->new(%args);
+    $self->add_to_cleanup(
+        'tmp_db_????.sql',
+        'postmaster.log',
+    );
+    $self;
 }
 
 # Return an array of patch filenames.
@@ -384,7 +397,7 @@ sub _read_patches_applied_file {
     my %h;
     my $readme = $args{filename} || join '/', $self->base_dir, qw(db dist patches_applied.txt);
     return %h unless -e $readme;
-    my @lines = IO::File->new("<$readme")->getlines;
+    my @lines = file($readme)->slurp;
     for my $line (@lines) {
         my @info = split /\s+/, $line;
         $h{$info[0]} = \@info;
@@ -536,7 +549,7 @@ sub ACTION_dbfakeinstall {
     $self->_show_live_db();
 
     # 3. Dump the schema from the live database to a temporary directory.
-    my $existing_schema = File::Temp->new();
+    my $existing_schema = File::Temp->new(TEMPLATE => "tmp_db_XXXX", SUFFIX => '.sql');
     $existing_schema->close;
     if ($self->_is_fresh_install()) {
         info "Ready to create the base database.";
@@ -583,7 +596,7 @@ sub ACTION_dbfakeinstall {
     $self->_start_new_db();
     $self->_create_language_extensions;
     $self->_apply_base_sql("$existing_schema") # NB: contains patches_applied table
-        or die "error with existing schema";
+        or do { $existing_schema->unlink_on_destroy(0); die "error with existing schema" };
     do { $self->_apply_patch($_) or die "patch $_ failed" } for @todo;
     $self->_remove_patches_applied_table();
     $self->_dump_base_sql(outfile => "$tmp");
