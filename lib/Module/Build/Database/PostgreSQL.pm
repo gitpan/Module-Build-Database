@@ -38,6 +38,10 @@ The options are as follows ;
 
 =over 4
 
+=item database_options
+
+=over 4
+
 =item name
 
 the name of the database (i.e. 'create database $name')
@@ -74,6 +78,8 @@ during an initial L<dbinstall|Module::Build::Database#dbinstall>; when the targe
 An example of using the after_create statement would be to create a second schema which
 will not be managed by MBD, but on which the MBD-managed schema depends.
 
+=back
+
 =item database_extension 
 
 To specify a server side procedural language you can use the C<database_extension> -E<gt> C<languages>
@@ -94,6 +100,56 @@ This is also similar to
 
 except it is executed on B<every> L<dbinstall|Module::Build::Database#dbinstall> meaning you can use this to add extensions to
 existing database deployments.
+
+=item postgis_base
+
+Specify the directory containing postgis.sql and spatial_ref_sys.sql.  If specified these SQL files will be loaded so that
+you can use PostGIS in your database.
+
+=item leave_running
+
+If set to true, and if you are not using a persistent scratch database (see next option), then the scratch database will
+not be stopped and torn down after running C<Build dbtest> or C<Build dbfakeinstall>.
+
+=item scratch_database
+
+You can use this option to specify the connection settings for a persistent scratch or temporary database instance, used by
+the C<Build dbtest> and C<Build dbfakeinstall> to test schema.  B<IMPORTANT>: the C<Build dbtest> and C<Build dbfakeinstall>
+will drop and re-create databases on the scratch instance with the same name as the database on your production instance so
+it is I<very> important that if you use a persistent scratch database that it be dedicated to that task.
+
+ my $builder = Module::Build::Database->new(
+   scratch_database => {
+     PGHOST => 'databasehost',
+     PGPORT => '5555',
+     PGUSER => 'dbuser',
+   },
+ );
+
+If you specify any one of these keys for this option (C<PGHOST>, C<PGPORT>, C<PGUSER>) then MBD will use a persistent
+scratch database.  Any missing values will use the default.
+
+You can also specify these settings using environment variables:
+
+ % export MBD_SCRATCH_PGHOST=databasehost
+ % export MBD_SCRATCH_PGPORT=5555
+ % export MBD_SCRATCH_PGUSER=dbuser
+
+By default this module will create its own scratch PostgreSQL instance that uses unix domain sockets for communication 
+each time it needs one when you use the C<Build dbtest> or C<Build dbfakeinstall> commands.  Situations where you might
+need to use a persistent scratch database:
+
+=over 4
+
+=item 1.
+
+The server and server binaries are hosted on a system different to the one that you are doing development
+
+=item 2.
+
+You are using MBD on Windows where unix domain sockets are not available
+
+=back
 
 =back
 
@@ -128,6 +184,9 @@ __PACKAGE__->add_property(database_extensions => default => { postgis => 0 } );
 __PACKAGE__->add_property(postgis_base        => default => "/usr/local/share/postgis" );
 __PACKAGE__->add_property(_tmp_db_dir         => default => "" );
 __PACKAGE__->add_property(leave_running       => default => 0 ); # leave running after dbtest?
+__PACKAGE__->add_property(scratch_database    => default => { map {; "PG$_" => $ENV{"MBD_SCRATCH_PG$_"} } 
+                                                              grep { defined $ENV{"MBD_SCRATCH_PG$_"} } 
+                                                              qw( HOST PORT USER ) } );
 
 # Binaries used by this module.  They should be in $ENV{PATH}.
 our %Bin = (
@@ -136,14 +195,17 @@ our %Bin = (
     Postgres   => 'postgres',
     Initdb     => 'initdb',
     Createdb   => 'createdb',
+    Dropdb     => 'dropdb',
     Pgdump     => 'pg_dump',
     Pgdoc      => [ qw/pg_autodoc postgresql_autodoc/ ],
 );
 my $server_bin_dir;
 if(my $pg_config = which 'pg_config')
 {
+  $pg_config = Win32::GetShortPathName($pg_config) if $^O eq 'MSWin32' && $pg_config =~ /\s/;
   $server_bin_dir = `$pg_config --bindir`;
   chomp $server_bin_dir;
+  $server_bin_dir = Win32::GetShortPathName($server_bin_dir) if $^O eq 'MSWin32' && $server_bin_dir =~ /\s/;
   undef $server_bin_dir unless -d $server_bin_dir;
 }
 verify_bin(\%Bin, $server_bin_dir);
@@ -157,7 +219,7 @@ sub _do_psql {
     $tmp->close;
     # -q: quiet, ON_ERROR_STOP: throw exceptions
     local $ENV{PERL5LIB};
-    my $ret = do_system( $Bin{Psql}, "-q", "-v'ON_ERROR_STOP=1'", "-f", "$tmp", $database_name );
+    my $ret = do_system( $Bin{Psql}, "-q", "-vON_ERROR_STOP=1", "-f", "$tmp", $database_name );
     $tmp->unlink_on_destroy($ret);
     $ret;
 }
@@ -167,7 +229,7 @@ sub _do_psql_out {
     my $database_name  = $self->database_options('name');
     # -F field separator, -x extended output, -A: unaligned
     local $ENV{PERL5LIB};
-    do_system( $Bin{Psql}, "-q", "-v'ON_ERROR_STOP=1'", "-A", "-F ' : '", "-x", "-c", qq["$sql"], $database_name );
+    do_system( $Bin{Psql}, "-q", "-vON_ERROR_STOP=1", "-A", "-F ' : '", "-x", "-c", qq["$sql"], $database_name );
 }
 sub _do_psql_file {
     my $self = shift;
@@ -183,7 +245,7 @@ sub _do_psql_file {
     my $database_name  = $self->database_options('name');
     # -q: quiet, ON_ERROR_STOP: throw exceptions
     local $ENV{PERL5LIB};
-    do_system($Bin{Psql},"-q","-v'ON_ERROR_STOP=1'","-f",$filename, $database_name);
+    do_system($Bin{Psql},"-q","-vON_ERROR_STOP=1","-f",$filename, $database_name);
 }
 sub _do_psql_into_file {
     my $self = shift;
@@ -192,7 +254,8 @@ sub _do_psql_into_file {
     my $database_name  = $self->database_options('name');
     # -A: unaligned, -F: field separator, -t: tuples only, ON_ERROR_STOP: throw exceptions
     local $ENV{PERL5LIB};
-    do_system( $Bin{Psql}, "-q", "-v'ON_ERROR_STOP=1'", "-A", "-F '\t'", "-t", "-c", qq["$sql"], $database_name, ">", "$filename" );
+    my $q = $^O eq 'MSWin32' ? '"' : "'";
+    do_system( $Bin{Psql}, "-q", "-vON_ERROR_STOP=1", "-A", "-F $q\t$q", "-t", "-c", qq["$sql"], $database_name, ">", "$filename" );
 }
 sub _do_psql_capture {
     my $self = shift;
@@ -225,38 +288,46 @@ sub _start_new_db {
     my $self = shift;
     # Start a new database and return the host on which it was started.
 
-    $self->_cleanup_old_dbs();
-
     my $database_name   = $self->database_options('name');
-    my $database_schema = $self->database_options('schema');
-    my $tmpdir          = tempdir("mbdtest_XXXXXX", TMPDIR => 1);
-    my $dbdir           = $tmpdir."/db";
-    my $initlog         = "$tmpdir/postgres.log";
-    $self->_tmp_db_dir($dbdir);
-
-    $ENV{PGHOST}     = "$dbdir"; # makes psql use a socket, not a tcp port
     $ENV{PGDATABASE} = $database_name;
-    delete $ENV{PGUSER};
-    delete $ENV{PGPORT};
 
-    debug "initializing database (log: $initlog)";
+    if(%{ $self->scratch_database }) {
+        delete @ENV{qw( PGHOST PGUSER PGPORT )};
+        %ENV = (%ENV, %{ $self->scratch_database });
+        do_system("_silent", $Bin{Dropdb}, $database_name);
 
-    do_system($Bin{Initdb}, "-D", "$dbdir", ">>", "$initlog", "2>&1") or die "could not initdb";
+    } else {
 
-    if (my $conf_append = $self->database_options('append_to_conf')) {
-        die "cannot find postgresql.conf" unless -e "$dbdir/postgresql.conf";
-        open my $fp, ">> $dbdir/postgresql.conf" or die "could not open postgresql.conf : $!";
-        print $fp $conf_append;
-        close $fp;
+        $self->_cleanup_old_dbs();
+
+        my $tmpdir          = tempdir("mbdtest_XXXXXX", TMPDIR => 1);
+        my $dbdir           = $tmpdir."/db";
+        my $initlog         = "$tmpdir/postgres.log";
+        $self->_tmp_db_dir($dbdir);
+
+        $ENV{PGHOST}     = "$dbdir"; # makes psql use a socket, not a tcp port
+        delete $ENV{PGUSER};
+        delete $ENV{PGPORT};
+
+        debug "initializing database (log: $initlog)";
+
+        do_system($Bin{Initdb}, "-D", "$dbdir", ">>", "$initlog", "2>&1") or die "could not initdb";
+
+        if (my $conf_append = $self->database_options('append_to_conf')) {
+            die "cannot find postgresql.conf" unless -e "$dbdir/postgresql.conf";
+            open my $fp, ">> $dbdir/postgresql.conf" or die "could not open postgresql.conf : $!";
+            print $fp $conf_append;
+            close $fp;
+        }
+
+        my $pmopts = qq[-k $dbdir -h '' -p 5432];
+
+        debug "# starting postgres in $dbdir";
+        do_system($Bin{Pgctl}, qq[-o "$pmopts"], "-w", "-t", 120, "-D", "$dbdir", "-l", "postmaster.log", "start") or die "could not start postgres";
+
+        my $domain = $dbdir.'/.s.PGSQL.5432';
+        -e $domain or die "could not find $domain";
     }
-
-    my $pmopts = qq[-k $dbdir -h '' -p 5432];
-
-    debug "# starting postgres in $dbdir";
-    do_system($Bin{Pgctl}, qq[-o "$pmopts"], "-w", "-t", 120, "-D", "$dbdir", "-l", "postmaster.log", "start") or die "could not start postgres";
-
-    my $domain = $dbdir.'/.s.PGSQL.5432';
-    -e $domain or die "could not find $domain";
 
     $self->_create_database();
 
@@ -265,7 +336,7 @@ sub _start_new_db {
 
 sub _remove_db {
     my $self = shift;
-    return if $ENV{MBD_DONT_STOP_TEST_DB};
+    return if $ENV{MBD_DONT_STOP_TEST_DB} || %{ $self->scratch_database };
     my $dbdir = shift || $self->_tmp_db_dir();
     $dbdir =~ s/\/db$//;
     rmtree $dbdir;
@@ -273,7 +344,7 @@ sub _remove_db {
 
 sub _stop_db {
     my $self = shift;
-    return if $ENV{MBD_DONT_STOP_TEST_DB};
+    return if $ENV{MBD_DONT_STOP_TEST_DB} || %{ $self->scratch_database };
     my $dbdir = shift || $self->_tmp_db_dir();
     my $pid_file = "$dbdir/postmaster.pid";
     unless (-e $pid_file) {
@@ -311,29 +382,27 @@ sub _dump_base_sql {
     my %args = @_;
     my $outfile = $args{outfile} || $self->base_dir. "/db/dist/base.sql";
 
-    my $tmpfile = File::Temp->new(
-        TEMPLATE => (dirname $outfile)."/dump_XXXXXX",
-    );
+    my $tmpfile = file( tempdir( CLEANUP => 1 ), 'dump.sql');
 
     # -x : no privileges, -O : no owner, -s : schema only, -n : only this schema
     my $database_schema = $self->database_options('schema');
     my $database_name   = $self->database_options('name');
     local $ENV{PERL5LIB};
-    do_system( $Bin{Pgdump}, "-xOs", "-E", "utf8", "-n", $database_schema, $database_name, ">", "$tmpfile" )
+    do_system( $Bin{Pgdump}, "-xOs", "-E", "utf8", "-n", $database_schema, $database_name, ">", $tmpfile )
     or do {
       info "Error running pgdump";
       die "Error running pgdump : $! ${^CHILD_ERROR_NATIVE}";
       return 0;
     };
 
-    my @lines = file($tmpfile)->slurp();
+    my @lines = $tmpfile->slurp();
     unless (@lines) {
         die "# Could not run pgdump and write to $tmpfile";
     }
     @lines = grep {
         $_ !~ /^--/
         and $_ !~ /^CREATE SCHEMA $database_schema;$/
-        and $_ !~ /^SET search_path/;
+        and $_ !~ /^SET (search_path|lock_timeout)/
     } @lines;
     for (@lines) {
         /alter table/i and s/$database_schema\.//;
@@ -362,7 +431,7 @@ sub _dump_base_data {
     my $database_name   = $self->database_options('name');
     local $ENV{PERL5LIB};
     do_system( $Bin{Pgdump}, "--data-only", "-xO", "-E", "utf8", "-n", $database_schema, $database_name,
-        "|", "egrep -v '^SET search_path'",
+        "|", "egrep -v '^SET (lock_timeout|search_path)'",
         ">", "$tmpfile" )
       or return 0;
     rename "$tmpfile", $outfile or die "rename failed: $!";
@@ -450,7 +519,7 @@ sub _database_exists {
     my $self  =  shift;
     my $database_name = shift || $self->database_options('name');
     local $ENV{PERL5LIB};
-    do_system("_silent","psql -Alt -F ':' | egrep -q '^$database_name:'");
+    scalar grep /^$database_name$/, map { [split /:/]->[0] } `psql -Alt -F:`;
 }
 
 sub _create_language_extensions {
@@ -583,7 +652,7 @@ sub ACTION_dbinstall     { shift->SUPER::ACTION_dbinstall(@_);     }
 sub ACTION_dbfakeinstall { shift->SUPER::ACTION_dbfakeinstall(@_); }
 
 sub _dbhost {
-    return $ENV{PGHOST};
+    return $ENV{PGHOST} || 'localhost';
 }
 
 1;
